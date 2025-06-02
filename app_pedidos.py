@@ -294,6 +294,6 @@ def generar_pedido(n, cliente, comercial, codigos, cantidades, colores):
     return dcc.send_bytes(buffer.read(), filename="pedido.pdf"), "✅ Pedido generado correctamente."
 
 if __name__ == "__main__":
-    server = app.server
+    app.run(debug=True)  # ← Esto va DENTRO del if
 
 
