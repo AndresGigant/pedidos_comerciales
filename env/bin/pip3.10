@@ -1,5 +1,5 @@
 #!/bin/sh
-'''exec' "/Users/gigante/Desktop/Proyecto Visualizacion 2025/Proyecto_Catalogo/env/bin/python3.11" "$0" "$@"
+'''exec' "/Users/gigante/Desktop/Proyecto Visualizacion 2025/pedidos_comerciales/env/bin/python3.11" "$0" "$@"
 ' '''
 # -*- coding: utf-8 -*-
 import re

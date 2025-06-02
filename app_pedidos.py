@@ -1,22 +1,26 @@
+# app_pedidos.py — Versión fusionada y mejorada
+
 import dash
 from dash import dcc, html, Input, Output, State, ALL, ctx
 import dash_bootstrap_components as dbc
 import pandas as pd
 import datetime
-import io
 import os
+import io
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
 import plotly.express as px
 
-# Rutas
+# === Rutas ===
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 EXCEL_PATH = os.path.join(BASE_DIR, "data", "PROYECTO_APP_CLIENTES.xlsx")
 CSV_PATH = os.path.join(BASE_DIR, "data", "historial_pedidos.csv")
+PDF_PREVIEW = os.path.join(BASE_DIR, "preview", "pedido_preview.pdf")
+os.makedirs(os.path.dirname(PDF_PREVIEW), exist_ok=True)
 
-# Cargar datos
+# === Cargar datos ===
 clientes_df = pd.read_excel(EXCEL_PATH, sheet_name="clientes")
 clientes_df.columns = clientes_df.columns.str.strip()
 articulos_df = pd.read_excel(EXCEL_PATH, sheet_name="articulos")
@@ -25,28 +29,28 @@ comerciales_df = pd.read_excel(EXCEL_PATH, sheet_name="comerciales")
 stock_df = pd.read_excel(EXCEL_PATH, sheet_name="stock  por color")
 stock_df.columns = stock_df.columns.str.strip()
 
-# Dropdowns
 clientes_options = [{"label": row["Nombre Comercial"], "value": row["Nombre Comercial"]} for _, row in clientes_df.iterrows() if pd.notna(row["Nombre Comercial"])]
 comerciales_options = [{"label": str(c), "value": str(c)} for c in comerciales_df["comerciales"] if isinstance(c, str) and c.strip() != ""]
 articulos_options = [{"label": f"{row['codigo']} - {row['articulos']}", "value": str(row['codigo'])} for _, row in articulos_df.dropna(subset=["codigo", "articulos"]).iterrows()]
 colores_disponibles = sorted(stock_df["COLOR"].dropna().unique())
 
-# Login preset (usuario: admin / clave: admin123)
-VALID_USER = "admin"
-VALID_PASS = "admin123"
-session_logged = {"status": False}
+# === Usuarios y roles ===
+USUARIOS = {
+    "admin": {"clave": "admin123", "rol": "comercial"},
+    "Marton2025": {"clave": "2525", "rol": "admin"}
+}
+session_user = {"activo": False, "usuario": None, "rol": None}
 
-# App init
-app = dash.Dash(__name__, suppress_callback_exceptions=True, external_stylesheets=[dbc.themes.BOOTSTRAP])
+# === App Init ===
+app = dash.Dash(__name__, suppress_callback_exceptions=True, external_stylesheets=[dbc.themes.SLATE])
 app.title = "Pedidos Comerciales"
 
-# Layout base con login
 app.layout = html.Div([
     dcc.Location(id="url"),
     html.Div(id="page-content")
 ])
 
-# Login page
+# === Login Layout ===
 login_layout = dbc.Container([
     html.H2("Iniciar Sesión", className="text-center mt-5"),
     dbc.Row([
@@ -59,20 +63,10 @@ login_layout = dbc.Container([
     ], justify="center")
 ])
 
-# Sidebar
-sidebar = dbc.Col([
-    html.Img(src="/assets/logo_marton.png", style={"width": "100%", "marginBottom": 20}),
-    html.H4("Menú", className="text-center"),
-    dbc.Nav([
-        dbc.NavLink("Generar Pedido", href="/pedido", active="exact"),
-        dbc.NavLink("Stock por Color", href="/stock", active="exact"),
-        dbc.NavLink("Historial", href="/historial", active="exact"),
-        dbc.NavLink("Dashboard", href="/dashboard", active="exact"),
-        dbc.NavLink("Cerrar Sesión", href="/logout", active="exact", id="logout")
-    ], vertical=True)
-], width=2, className="bg-light p-3")
+# === Sidebar ===
+sidebar = dbc.Col(id="sidebar-content", width=2, className="bg-light p-3")
 
-# Página protegida base
+# === Protected Layout ===
 protected_layout = dbc.Container([
     dbc.Row([
         sidebar,
@@ -80,9 +74,53 @@ protected_layout = dbc.Container([
     ])
 ], fluid=True)
 
-# Layouts individuales (pedido, stock, historial, dashboard)
-def pedido_tab():
-    return html.Div([
+@app.callback(Output("sidebar-content", "children"), Input("url", "pathname"))
+def mostrar_menu(path):
+    if not session_user["activo"]:
+        return ""
+    
+    link_style = {"color": "black", "fontWeight": "bold"}
+    
+    menu = [dbc.NavLink("Generar Pedido", href="/pedido", active="exact", style=link_style)]
+    
+    if session_user["rol"] == "admin":
+        menu += [
+            dbc.NavLink("Stock por Color", href="/stock", active="exact", style=link_style),
+            dbc.NavLink("Historial", href="/historial", active="exact", style=link_style),
+            dbc.NavLink("Dashboard", href="/dashboard", active="exact", style=link_style)
+        ]
+    
+    menu.append(dbc.NavLink("Cerrar Sesión", href="/logout", active="exact", style=link_style))
+    
+    return [
+        html.H4("Menú", className="text-center", style={"color": "black", "fontWeight": "bold"}),
+        dbc.Nav(menu, vertical=True)
+    ]
+
+@app.callback(Output("page-content", "children"), Input("url", "pathname"))
+def render_page(path):
+    if path == "/" or path == "/logout":
+        session_user.update({"activo": False, "usuario": None, "rol": None})
+        return login_layout
+    if not session_user["activo"]:
+        return login_layout
+    return protected_layout
+
+@app.callback(
+    Output("url", "pathname"), Output("login-alert", "children"),
+    Input("login-btn", "n_clicks"), State("username", "value"), State("password", "value"),
+    prevent_initial_call=True
+)
+def login(n, user, pwd):
+    if user in USUARIOS and USUARIOS[user]["clave"] == pwd:
+        session_user.update({"activo": True, "usuario": user, "rol": USUARIOS[user]["rol"]})
+        return "/pedido", ""
+    return dash.no_update, "Credenciales incorrectas."
+
+# === Layouts ===
+def layout_pedido():
+    return dbc.Container([
+        html.H3("Generar Pedido"),
         dbc.Row([
             dbc.Col(dcc.Dropdown(id="cliente", options=clientes_options, placeholder="Selecciona cliente"), md=4),
             dbc.Col(dcc.Dropdown(id="comercial", options=comerciales_options, placeholder="Selecciona comercial"), md=4)
@@ -96,7 +134,7 @@ def pedido_tab():
         dcc.Download(id="descarga_pdf")
     ])
 
-def stock_tab():
+def layout_stock():
     series_options = sorted(stock_df["SERIE"].dropna().unique())
     color_options = sorted(stock_df["COLOR"].dropna().unique())
     return html.Div([
@@ -107,13 +145,15 @@ def stock_tab():
         html.Div(id="tabla_stock")
     ])
 
-def historial_tab():
+def layout_historial():
     if not os.path.exists(CSV_PATH):
         return html.Div("Sin historial disponible.")
     df = pd.read_csv(CSV_PATH)
+    if session_user["rol"] == "comercial":
+        df = df[df["Comercial"] == session_user["usuario"]]
     return dbc.Table.from_dataframe(df.tail(20), striped=True, bordered=True, hover=True)
 
-def dashboard_tab():
+def layout_dashboard():
     if not os.path.exists(CSV_PATH):
         return html.Div("Sin datos de pedidos para análisis.")
     df = pd.read_csv(CSV_PATH)
@@ -136,57 +176,21 @@ def dashboard_tab():
         dcc.Graph(figure=fig3)
     ])
 
-# Routing
-@app.callback(
-    Output("page-content", "children"),
-    Input("url", "pathname")
-)
-def render_page(path):
-    if path == "/" or path == "/logout":
-        session_logged["status"] = False
-        return login_layout
-    elif not session_logged["status"]:
-        return login_layout
-    else:
-        return protected_layout
-
-# Login
-@app.callback(
-    Output("url", "pathname"),
-    Output("login-alert", "children"),
-    Input("login-btn", "n_clicks"),
-    State("username", "value"),
-    State("password", "value"),
-    prevent_initial_call=True
-)
-def login(n, user, pwd):
-    if user == VALID_USER and pwd == VALID_PASS:
-        session_logged["status"] = True
-        return "/pedido", ""
-    return dash.no_update, "Credenciales incorrectas."
-
-# Cargar contenido dinámico de páginas protegidas
-@app.callback(
-    Output("contenido_paginas", "children"),
-    Input("url", "pathname")
-)
+# === Routing de contenido ===
+@app.callback(Output("contenido_paginas", "children"), Input("url", "pathname"))
 def cambiar_contenido(path):
     if path == "/pedido":
-        return pedido_tab()
+        return layout_pedido()
     elif path == "/stock":
-        return stock_tab()
+        return layout_stock()
     elif path == "/historial":
-        return historial_tab()
+        return layout_historial()
     elif path == "/dashboard":
-        return dashboard_tab()
+        return layout_dashboard()
     return "Página no encontrada."
 
-# Tabla stock
-@app.callback(
-    Output("tabla_stock", "children"),
-    Input("filtro_serie_stock", "value"),
-    Input("filtro_color", "value")
-)
+# === Callbacks de funcionalidad ===
+@app.callback(Output("tabla_stock", "children"), Input("filtro_serie_stock", "value"), Input("filtro_color", "value"))
 def actualizar_tabla_stock(series, colores):
     df = stock_df.copy()
     if series:
@@ -195,11 +199,7 @@ def actualizar_tabla_stock(series, colores):
         df = df[df["COLOR"].isin(colores)]
     return dbc.Table.from_dataframe(df, striped=True, bordered=True, hover=True) if not df.empty else html.Div("No hay resultados.")
 
-# Mostrar artículos
-@app.callback(
-    Output("tabla_articulos", "children"),
-    Input("perfil_selector", "value")
-)
+@app.callback(Output("tabla_articulos", "children"), Input("perfil_selector", "value"))
 def mostrar_tabla(perfiles):
     if not perfiles:
         return html.Div()
@@ -209,17 +209,26 @@ def mostrar_tabla(perfiles):
         filas.append(html.Tr([
             html.Td(fila["codigo"]),
             html.Td(fila["articulos"]),
-            html.Td(dcc.Input(type="number", min=1, step=1, id={"type": "cantidad", "index": str(cod)}, placeholder="Cantidad")),
+            html.Td(dcc.Input(
+                type="number",
+                min=1,
+                step=1,
+                id={"type": "cantidad", "index": str(cod)},
+                placeholder="Cantidad"
+            )),
             html.Td(dcc.Dropdown(
                 options=[{"label": c, "value": c} for c in colores_disponibles],
-                id={"type": "color", "index": str(cod)}, placeholder="Color"))
+                id={"type": "color", "index": str(cod)},
+                placeholder="Color",
+                style={"width": "180px", "fontWeight": "bold", "color": "black"}
+            ))
         ]))
     return dbc.Table([
         html.Thead(html.Tr(["Código", "Artículo", "Cantidad", "Color"])),
         html.Tbody(filas)
     ], bordered=True)
 
-# Generar PDF + guardar CSV
+
 @app.callback(
     Output("descarga_pdf", "data"),
     Output("mensaje_validacion", "children"),
@@ -248,38 +257,43 @@ def generar_pedido(n, cliente, comercial, codigos, cantidades, colores):
     df_out = pd.DataFrame(pedidos, columns=["Código", "Artículo", "Cantidad", "Color", "Cliente", "Comercial", "Fecha"])
     if os.path.exists(CSV_PATH):
         df_hist = pd.read_csv(CSV_PATH)
-        df_hist = pd.concat([df_hist, df_out], ignore_index=True)
-    else:
-        df_hist = df_out
-    df_hist.to_csv(CSV_PATH, index=False)
+        df_out = pd.concat([df_hist, df_out], ignore_index=True)
+    df_out.to_csv(CSV_PATH, index=False)
 
-    output = io.BytesIO()
-    doc = SimpleDocTemplate(output, pagesize=letter)
+        # Generar PDF
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter)
     styles = getSampleStyleSheet()
-    elements = [Paragraph(f"Cliente: {cliente}", styles["Normal"]), Paragraph(f"Comercial: {comercial}", styles["Normal"]), Paragraph(f"Fecha: {fecha_actual}", styles["Normal"]), Spacer(1, 12)]
-    data = [["Código", "Artículo", "Cantidad", "Color"]] + [[p[0], p[1], p[2], p[3]] for p in pedidos]
+    elems = []
+
+    # 🧾 Título y datos del pedido
+    elems.append(Paragraph("Resumen del Pedido", styles['Title']))
+    elems.append(Spacer(1, 12))
+    elems.append(Paragraph(f"<b>Cliente:</b> {cliente}", styles['Normal']))
+    elems.append(Paragraph(f"<b>Comercial:</b> {comercial}", styles['Normal']))
+    elems.append(Paragraph(f"<b>Fecha:</b> {fecha_actual}", styles['Normal']))
+    elems.append(Spacer(1, 12))
+
+    # Tabla de artículos
+    data = [["Código", "Artículo", "Cantidad", "Color"]] + [
+        [p[0], p[1], p[2], p[3]] for p in pedidos
+    ]
     table = Table(data)
     table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER')
     ]))
-    elements.append(table)
-    doc.build(elements)
-    output.seek(0)
-    return dcc.send_bytes(output.read(), f"pedido_{cliente.replace(' ', '_')}.pdf"), ""
 
-if __name__ == '__main__':
-    import os
-port = int(os.environ.get("PORT", 8053))
-app.run(debug=False, host='0.0.0.0', port=port)
+    elems.append(table)
+    doc.build(elems)
+    buffer.seek(0)
 
+    return dcc.send_bytes(buffer.read(), filename="pedido.pdf"), "✅ Pedido generado correctamente."
 
-
-
-
+if __name__ == "__main__":
+    server = app.server
 
 
